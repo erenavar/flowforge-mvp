@@ -1,41 +1,57 @@
-import React, { useState, useEffect } from "react";
-import logo from "./logo.svg";
+import React, { useState } from "react";
+import axios from "axios"; // axios'u import et
 import "./App.css";
 
-// Backend servisimizin adresi
 const API_URL = "http://localhost:3001";
 
 function App() {
-  // Backend'den gelen mesajı saklamak için bir state
-  const [message, setMessage] = useState("");
+  const [prompt, setPrompt] = useState(""); // Kullanıcının girdiği metin
+  const [aiResponse, setAiResponse] = useState(""); // AI'dan gelen cevap
+  const [isLoading, setIsLoading] = useState(false); // Yükleme durumu
 
-  // Bu hook, bileşen ilk yüklendiğinde sadece bir kez çalışır
-  useEffect(() => {
-    // BFF'e istek atacak asenkron bir fonksiyon
-    const fetchMessage = async () => {
-      try {
-        const response = await fetch(`${API_URL}/`); // Ana endpoint'e GET isteği at
-        const data = await response.json();
-        setMessage(data.message); // Gelen mesajı state'e ata
-      } catch (error) {
-        console.error("API'ye bağlanırken hata oluştu:", error);
-        setMessage(
-          "Backend'e bağlanılamadı. (Sunucunun çalıştığından emin misin?)"
-        );
-      }
-    };
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setAiResponse("");
 
-    fetchMessage(); // Fonksiyonu çağır
-  }, []); // Boş dependency array'i, bu etkinin sadece bir kez çalışmasını sağlar
+    try {
+      // BFF'deki /generate endpoint'ine POST isteği gönder
+      const response = await axios.post(`${API_URL}/generate`, {
+        userPrompt: prompt,
+      });
+      setAiResponse(response.data.aiResponse);
+    } catch (error) {
+      console.error("Yapay zeka sorgusu gönderilirken hata oluştu:", error);
+      setAiResponse("Bir hata oluştu. Lütfen tekrar deneyin.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="App">
       <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <h2>FlowForge MVP</h2>
-        <p>
-          Backend'den Gelen Mesaj: <strong>{message || "Yükleniyor..."}</strong>
-        </p>
+        <h2>FlowForge AI Entegrasyonu</h2>
+        <form onSubmit={handleSubmit}>
+          <textarea
+            rows="4"
+            cols="60"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Yapay zekadan ne yapmasını istersin?"
+          />
+          <br />
+          <button type="submit" disabled={isLoading}>
+            {isLoading ? "Düşünüyor..." : "Gönder"}
+          </button>
+        </form>
+
+        {aiResponse && (
+          <div className="response-container">
+            <h4>Yapay Zeka'nın Cevabı:</h4>
+            <p>{aiResponse}</p>
+          </div>
+        )}
       </header>
     </div>
   );
