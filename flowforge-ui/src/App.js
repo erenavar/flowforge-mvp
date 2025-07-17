@@ -1,28 +1,44 @@
 import React, { useState } from "react";
-import axios from "axios"; // axios'u import et
+import axios from "axios";
 import "./App.css";
 
 const API_URL = "http://localhost:3001";
+const N8N_URL = "http://localhost:5678";
 
 function App() {
-  const [prompt, setPrompt] = useState(""); // Kullanıcının girdiği metin
-  const [aiResponse, setAiResponse] = useState(""); // AI'dan gelen cevap
-  const [isLoading, setIsLoading] = useState(false); // Yükleme durumu
+  const [prompt, setPrompt] = useState("");
+  const [status, setStatus] = useState(""); // Durum mesajı için
+  const [newWorkflowUrl, setNewWorkflowUrl] = useState(""); // Yeni workflow linki
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
-    setAiResponse("");
+    setNewWorkflowUrl("");
+    setStatus("1/2: Yapay zeka workflow üretiyor...");
 
     try {
-      // BFF'deki /generate endpoint'ine POST isteği gönder
-      const response = await axios.post(`${API_URL}/generate`, {
-        userPrompt: prompt,
-      });
-      setAiResponse(response.data.aiResponse);
+      // Adım 1: AI'dan workflow JSON'unu al
+      const generateResponse = await axios.post(
+        `${API_URL}/generate-workflow`,
+        { userPrompt: prompt }
+      );
+      const workflowJson = generateResponse.data.workflow;
+
+      setStatus("2/2: Workflow n8n'e kaydediliyor...");
+
+      // Adım 2: Üretilen JSON'u n8n'e gönder
+      const createResponse = await axios.post(
+        `${API_URL}/create-n8n-workflow`,
+        { workflowData: workflowJson }
+      );
+      const newWorkflowId = createResponse.data.id;
+
+      setNewWorkflowUrl(`${N8N_URL}/workflow/${newWorkflowId}`);
+      setStatus("Başarılı! İş akışınız oluşturuldu.");
     } catch (error) {
-      console.error("Yapay zeka sorgusu gönderilirken hata oluştu:", error);
-      setAiResponse("Bir hata oluştu. Lütfen tekrar deneyin.");
+      console.error("İşlem sırasında hata oluştu:", error);
+      setStatus("Bir hata oluştu. Lütfen tekrar deneyin.");
     } finally {
       setIsLoading(false);
     }
@@ -31,25 +47,34 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h2>FlowForge AI Entegrasyonu</h2>
+        <h2>FlowForge AI Workflow Generator</h2>
         <form onSubmit={handleSubmit}>
           <textarea
             rows="4"
-            cols="60"
+            cols="70"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Yapay zekadan ne yapmasını istersin?"
+            placeholder="Oluşturmak istediğin iş akışını anlat..."
           />
           <br />
           <button type="submit" disabled={isLoading}>
-            {isLoading ? "Düşünüyor..." : "Gönder"}
+            {isLoading ? "İşlem Sürüyor..." : "İş Akışını Oluştur ve Kaydet"}
           </button>
         </form>
 
-        {aiResponse && (
-          <div className="response-container">
-            <h4>Yapay Zeka'nın Cevabı:</h4>
-            <p>{aiResponse}</p>
+        {status && (
+          <div className="status-container">
+            <h4>İşlem Durumu:</h4>
+            <p>{status}</p>
+            {newWorkflowUrl && (
+              <a
+                href={newWorkflowUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="workflow-link">
+                Oluşturulan İş Akışını Görüntüle ve Aktive Et
+              </a>
+            )}
           </div>
         )}
       </header>
