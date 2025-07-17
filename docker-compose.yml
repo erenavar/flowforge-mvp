@@ -27,14 +27,25 @@ services:
       - DB_POSTGRESDB_DATABASE=n8n
       - DB_POSTGRESDB_USER=n8n
       - DB_POSTGRESDB_PASSWORD=mysecretpassword
-      # Geçici başlangıç için basit kimlik doğrulama
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=mysecretpassword
     depends_on:
       postgres:
         condition: service_healthy
 
+  redis:
+    image: redis:alpine
+    restart: always
+
+  # --- YENİ SERVİS ---
+  metabase:
+    image: metabase/metabase:latest
+    restart: always
+    ports:
+      - "3030:3000" # React portu ile çakışmaması için burayı 3030:3000 olarak değiştirebiliriz, şimdilik böyle kalsın.
+    depends_on:
+      - postgres
+    volumes:
+      - metabase_data:/metabase-data
+
 volumes:
   postgres_data:
-    driver: local
+  metabase_data: # Yeni volume

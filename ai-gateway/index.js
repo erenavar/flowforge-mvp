@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const { CohereClient } = require("cohere-ai");
-const { v4: uuidv4 } = require("uuid"); // Benzersiz ID'ler üretmek için
+const { v4: uuidv4 } = require("uuid");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -12,28 +12,27 @@ const cohere = new CohereClient({ token: process.env.COHERE_API_KEY });
 app.use(cors());
 app.use(express.json());
 
-// --- YENİ MİMARİ: ÇEVİRİCİ FONKSİYON ---
-// Bu fonksiyon, AI'dan gelen basit AWM'yi alır ve mükemmel n8n JSON'una dönüştürür.
+// --- ÇEVİRİCİ FONKSİYON ---
 function buildN8nWorkflow(awm) {
   const nodes = [];
   const connections = {};
 
-  // 1. Start Node'u her zaman var
-  const startNodeId = uuidv4();
-  nodes.push({
+  const startNode = {
     parameters: {},
-    id: startNodeId,
+    id: uuidv4(),
     name: "Start",
     type: "n8n-nodes-base.start",
     typeVersion: 1,
     position: [250, 300],
-  });
+  };
+  nodes.push(startNode);
 
-  // 2. Tetikleyici (Trigger) Node'unu oluştur
   let triggerNode;
   if (awm.trigger?.type === "schedule") {
     triggerNode = {
-      parameters: { rule: { interval: [{ unit: "hours" }] } }, // Saatlik için basit bir kural
+      parameters: {
+        rule: { interval: [{ unit: awm.trigger.unit || "hours" }] },
+      },
       id: uuidv4(),
       name: "Schedule Trigger",
       type: "n8n-nodes-base.scheduleTrigger",
@@ -42,12 +41,13 @@ function buildN8nWorkflow(awm) {
     };
     nodes.push(triggerNode);
   }
-  // Buraya gelecekte başka trigger'lar eklenebilir (örn: gmail, webhook)
 
-  // 3. Eylem (Action) Node'larını oluştur ve bağla
-  let previousNode = triggerNode;
+  let previousNodeId = triggerNode?.id;
+
   awm.actions?.forEach((action, index) => {
     let currentNode;
+    const position = [750 + index * 250, 300];
+
     if (action.type === "httpRequest") {
       currentNode = {
         parameters: { url: action.url, responseFormat: "string" },
@@ -55,20 +55,40 @@ function buildN8nWorkflow(awm) {
         name: `HTTP Request: ${action.url}`,
         type: "n8n-nodes-base.httpRequest",
         typeVersion: 4.1,
-        position: [750 + index * 250, 300],
+        position: position,
+      };
+    } else if (action.type === "database_insert") {
+      const contentToInsert =
+        action.data || `Data received at ${new Date().toISOString()}`;
+      currentNode = {
+        parameters: {
+          operation: "executeQuery",
+          query: `INSERT INTO logs (source, content) VALUES ('${
+            action.source || "unknown"
+          }', '${contentToInsert}')`,
+        },
+        id: uuidv4(),
+        name: `Save to DB: ${action.table}`,
+        type: "n8n-nodes-base.postgresDb",
+        typeVersion: 2.2,
+        position: position,
+        credentials: {
+          postgresDb: {
+            id: process.env.N8N_POSTGRES_CREDENTIAL_ID,
+            name: "Postgres Credential",
+          },
+        },
       };
     }
-    // Buraya gelecekte başka action'lar eklenebilir (slack, log vb.)
 
     if (currentNode) {
       nodes.push(currentNode);
-      // Bir önceki node'u şimdikine bağla
-      if (previousNode) {
-        connections[previousNode.name] = {
-          main: [[{ node: currentNode.name, type: "main" }]],
+      if (previousNodeId) {
+        connections[previousNodeId] = {
+          main: [[{ node: currentNode.id, type: "main" }]],
         };
       }
-      previousNode = currentNode;
+      previousNodeId = currentNode.id;
     }
   });
 
@@ -80,22 +100,28 @@ function buildN8nWorkflow(awm) {
   };
 }
 
+// --- API ENDPOINT'LERİ ---
+
+app.get("/", (req, res) => {
+  res.json({ message: "AI Gateway çalışıyor! 🚀" });
+});
+
 app.post("/generate-workflow", async (req, res) => {
   const { userPrompt } = req.body;
   if (!userPrompt)
     return res.status(400).json({ error: "Lütfen bir metin girin." });
 
-  // YENİ META-PROMPT: Artık basit AWM formatını üretmesini istiyoruz
   const metaPrompt = `
-    Sen, doğal dildeki istekleri, sadece trigger ve action adımlarını içeren çok basit bir JSON formatına çeviren bir uzmansın.
+    Sen, doğal dildeki istekleri, aşağıda belirtilen "kullanılabilir araçlar" listesindeki eylemleri kullanarak basit bir JSON formatına (AWM) çeviren bir uzmansın.
     Kullanıcının isteği: "${userPrompt}"
 
-    Analiz et ve aşağıdaki formatta bir JSON üret:
-    {
-      "name": "Kullanıcının isteğine uygun kısa bir başlık",
-      "trigger": { "type": "schedule" | "webhook" | "gmail" ... },
-      "actions": [ { "type": "httpRequest", "url": "..." }, { "type": "logMessage", "message": "..." } ... ]
-    }
+    Kullanılabilir Araçlar ve Formatları:
+    - schedule: Zamanlanmış görev. Örn: { "type": "schedule", "unit": "hours" | "minutes" | "days" }
+    - httpRequest: Bir web sitesine istek atar. Örn: { "type": "httpRequest", "url": "https://site.com" }
+    - database_insert: Veritabanına log kaydı atar. Örn: { "type": "database_insert", "table": "logs", "source": "kaynak_adi" }
+    
+    Kullanıcının isteğini analiz et ve SADECE yukarıdaki araçları kullanarak aşağıdaki AWM formatında bir JSON üret.
+    Format: { "name": "...", "trigger": { ... }, "actions": [ { ... } ] }
     SADECE JSON üret.
   `;
 
@@ -113,18 +139,13 @@ app.post("/generate-workflow", async (req, res) => {
       rawResponseText,
       "\n----------------------------------"
     );
-
     const abstractWorkflowModel = JSON.parse(rawResponseText);
-
-    // ADIM B: Basit AWM'yi alıp mükemmel n8n JSON'una çeviriyoruz.
     const finalN8nJson = buildN8nWorkflow(abstractWorkflowModel);
-
     console.log(
       "--- Üretilen Nihai n8n JSON ---\n",
       JSON.stringify(finalN8nJson, null, 2),
       "\n---------------------------------"
     );
-
     res.json({ workflow: finalN8nJson });
   } catch (error) {
     console.error("!!! AWM İŞLENİRKEN HATA OLUŞTU !!!", error);
@@ -133,7 +154,6 @@ app.post("/generate-workflow", async (req, res) => {
 });
 
 app.post("/create-n8n-workflow", async (req, res) => {
-  // Bu endpoint'te değişiklik yok, olduğu gibi kalıyor.
   const { workflowData } = req.body;
   if (!workflowData)
     return res.status(400).json({ error: "Workflow verisi eksik." });
@@ -153,6 +173,7 @@ app.post("/create-n8n-workflow", async (req, res) => {
   }
 });
 
+// --- SUNUCUYU BAŞLATMA ---
 app.listen(PORT, () => {
   console.log(
     `BFF & AI Gateway http://localhost:${PORT} adresinde başlatıldı.`
