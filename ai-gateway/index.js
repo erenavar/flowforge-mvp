@@ -23,7 +23,7 @@ function buildN8nWorkflow(awm) {
     name: "Start",
     type: "n8n-nodes-base.start",
     typeVersion: 1,
-    position: [250, 300],
+    position: [80, 300],
   };
   nodes.push(startNode);
 
@@ -31,64 +31,112 @@ function buildN8nWorkflow(awm) {
   if (awm.trigger?.type === "schedule") {
     triggerNode = {
       parameters: {
-        rule: { interval: [{ unit: awm.trigger.unit || "hours" }] },
+        rule: {
+          interval: [
+            {
+              unit: awm.trigger.unit || "minutes",
+              value: awm.trigger.interval || 15,
+            },
+          ],
+        },
       },
       id: uuidv4(),
       name: "Schedule Trigger",
       type: "n8n-nodes-base.scheduleTrigger",
       typeVersion: 1.1,
-      position: [500, 300],
+      position: [250, 300],
     };
     nodes.push(triggerNode);
   }
 
   let previousNodeId = triggerNode?.id;
 
-  awm.actions?.forEach((action, index) => {
-    let currentNode;
-    const position = [750 + index * 250, 300];
-
-    if (action.type === "httpRequest") {
-      currentNode = {
-        parameters: { url: action.url, responseFormat: "string" },
-        id: uuidv4(),
-        name: `HTTP Request: ${action.url}`,
-        type: "n8n-nodes-base.httpRequest",
-        typeVersion: 4.1,
-        position: position,
-      };
-    } else if (action.type === "database_insert") {
-      const contentToInsert =
-        action.data || `Data received at ${new Date().toISOString()}`;
-      currentNode = {
+  awm.actions?.forEach((action) => {
+    if (action.type === "website_check") {
+      const httpRequestNode = {
         parameters: {
-          operation: "executeQuery",
-          query: `INSERT INTO logs (source, content) VALUES ('${
-            action.source || "unknown"
-          }', '${contentToInsert}')`,
+          url: action.url,
+          responseFormat: "string",
+          options: { ignoreSslIssues: true },
         },
         id: uuidv4(),
-        name: `Save to DB: ${action.table}`,
-        type: "n8n-nodes-base.postgresDb",
-        typeVersion: 2.2,
-        position: position,
+        name: `Check URL: ${action.url}`,
+        type: "n8n-nodes-base.httpRequest",
+        typeVersion: 4.1,
+        position: [500, 300],
+      };
+
+      const ifNode = {
+        parameters: {
+          conditions: {
+            boolean: [
+              {
+                value1: "={{ $json.statusCode }}",
+                operation: "equal",
+                value2: 200,
+              },
+            ],
+          },
+        },
+        id: uuidv4(),
+        name: "Is Site Up?",
+        type: "n8n-nodes-base.if",
+        typeVersion: 1,
+        position: [750, 300],
+      };
+
+      const successNode = {
+        parameters: {
+          operation: "executeQuery",
+          query: `INSERT INTO logs (source, content) VALUES ('${action.url}', '${action.onSuccess.message}')`,
+        },
+        id: uuidv4(),
+        name: "Log Success",
+        type: "n8n-nodes-base.postgres",
+        typeVersion: 5.1,
+        position: [1000, 200],
         credentials: {
-          postgresDb: {
+          postgres: {
             id: process.env.N8N_POSTGRES_CREDENTIAL_ID,
             name: "Postgres Credential",
           },
         },
       };
-    }
 
-    if (currentNode) {
-      nodes.push(currentNode);
+      const failureNode = {
+        parameters: {
+          operation: "executeQuery",
+          query: `INSERT INTO logs (source, content) VALUES ('${action.url}', '${action.onFailure.message}')`,
+        },
+        id: uuidv4(),
+        name: "Log Failure",
+        type: "n8n-nodes-base.postgres",
+        typeVersion: 5.1,
+        position: [1000, 400],
+        credentials: {
+          postgres: {
+            id: process.env.N8N_POSTGRES_CREDENTIAL_ID,
+            name: "Postgres Credential",
+          },
+        },
+      };
+
+      nodes.push(httpRequestNode, ifNode, successNode, failureNode);
+
       if (previousNodeId) {
         connections[previousNodeId] = {
-          main: [[{ node: currentNode.id, type: "main" }]],
+          main: [[{ node: httpRequestNode.id, type: "main" }]],
         };
       }
-      previousNodeId = currentNode.id;
+      connections[httpRequestNode.id] = {
+        main: [[{ node: ifNode.id, type: "main" }]],
+      };
+      connections[ifNode.id] = {
+        main: [
+          [{ node: successNode.id, type: "main" }], // Output 0 -> True
+          [{ node: failureNode.id, type: "main" }], // Output 1 -> False
+        ],
+      };
     }
   });
 
@@ -102,10 +150,6 @@ function buildN8nWorkflow(awm) {
 
 // --- API ENDPOINT'LERİ ---
 
-app.get("/", (req, res) => {
-  res.json({ message: "AI Gateway çalışıyor! 🚀" });
-});
-
 app.post("/generate-workflow", async (req, res) => {
   const { userPrompt } = req.body;
   if (!userPrompt)
@@ -116,9 +160,9 @@ app.post("/generate-workflow", async (req, res) => {
     Kullanıcının isteği: "${userPrompt}"
 
     Kullanılabilir Araçlar ve Formatları:
-    - schedule: Zamanlanmış görev. Örn: { "type": "schedule", "unit": "hours" | "minutes" | "days" }
-    - httpRequest: Bir web sitesine istek atar. Örn: { "type": "httpRequest", "url": "https://site.com" }
-    - database_insert: Veritabanına log kaydı atar. Örn: { "type": "database_insert", "table": "logs", "source": "kaynak_adi" }
+    - schedule: Zamanlanmış görev. Örn: { "type": "schedule", "unit": "minutes", "interval": 15 }
+    - website_check: Bir sitenin çalışıp çalışmadığını kontrol eder ve sonuca göre farklı loglar atar.
+      Örn: { "type": "website_check", "url": "https://site.com", "onSuccess": { "message": "Site ayakta" }, "onFailure": { "message": "Site çöktü" } }
     
     Kullanıcının isteğini analiz et ve SADECE yukarıdaki araçları kullanarak aşağıdaki AWM formatında bir JSON üret.
     Format: { "name": "...", "trigger": { ... }, "actions": [ { ... } ] }
@@ -133,7 +177,7 @@ app.post("/generate-workflow", async (req, res) => {
       temperature: 0,
     });
 
-    const rawResponseText = response.generations[0].text;
+    const rawResponseText = response.generations[0].text.trim();
     console.log(
       "--- AI'dan Gelen Ham AWM Cevabı ---\n",
       rawResponseText,
@@ -158,18 +202,19 @@ app.post("/create-n8n-workflow", async (req, res) => {
   if (!workflowData)
     return res.status(400).json({ error: "Workflow verisi eksik." });
   try {
-    const n8nApiUrl = "http://localhost:5678/api/v1/workflows";
-    const n8nApiKey = process.env.N8N_API_KEY;
-    const response = await axios.post(n8nApiUrl, workflowData, {
-      headers: { "X-N8N-API-KEY": n8nApiKey },
+    const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
+    await axios.post(n8nWebhookUrl, workflowData);
+    res.json({
+      message: "Workflow creation request sent to n8n successfully.",
     });
-    res.json(response.data);
   } catch (error) {
     console.error(
-      "!!! n8n'e WORKFLOW KAYDEDİLİRKEN HATA OLUŞTU !!!",
+      "!!! n8n Webhook'una gönderilirken HATA OLUŞTU !!!",
       error.response?.data || error.message
     );
-    res.status(500).json({ error: "n8n üzerinde workflow oluşturulamadı." });
+    res
+      .status(500)
+      .json({ error: "n8n webhook üzerinde workflow oluşturulamadı." });
   }
 });
 

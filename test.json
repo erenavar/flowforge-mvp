@@ -1,0 +1,82 @@
+{
+  "name": "Takvim Gazetesi Site Kontrol ve Loglama",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "62d70b2f-d267-4a32-a613-150483347cc9",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "unit": "minutes",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "id": "7bbcfa30-4d2e-49fe-8ec9-278bc050f6ed",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://www.takvim.com.tr",
+        "responseFormat": "string",
+        "options": {}
+      },
+      "id": "b8318c28-a674-4f44-90ce-890a351b129b",
+      "name": "HTTP Request: https://www.takvim.com.tr",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO logs (source, content) VALUES ('Takvim Gazetesi', '{{$json.body}}')"
+      },
+      "id": "8dbc24f9-912b-4338-b472-6bcab764ae69",
+      "name": "Save to DB: logs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 5.1,
+      "position": [1000, 300],
+      "credentials": {
+        "postgres": {
+          "id": "a1q4o32JREiyakQY",
+          "name": "Postgres Credential"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "7bbcfa30-4d2e-49fe-8ec9-278bc050f6ed": {
+      "main": [
+        [
+          {
+            "node": "b8318c28-a674-4f44-90ce-890a351b129b",
+            "type": "main"
+          }
+        ]
+      ]
+    },
+    "b8318c28-a674-4f44-90ce-890a351b129b": {
+      "main": [
+        [
+          {
+            "node": "8dbc24f9-912b-4338-b472-6bcab764ae69",
+            "type": "main"
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {}
+}
